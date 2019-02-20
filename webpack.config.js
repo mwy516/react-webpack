@@ -5,20 +5,28 @@ const MiniCssExtractPlugin = require("mini-css-extract-plugin");//打包css
 const CleanWebpackPlugin = require("clean-webpack-plugin");
 const UglifyJsPlugin = require('uglifyjs-webpack-plugin');
 const OptimizeCSSAssetsPlugin = require("optimize-css-assets-webpack-plugin");
+const { getIfUtils, removeEmpty } = require('webpack-config-utils')
+const { ifProduction, ifNotProduction } = getIfUtils(process.env.NODE_ENV)
 
 const ROOT_PATH = join(__dirname);
 const APP_PATH = join(ROOT_PATH, 'src');
 const BUILD_PATH = join(ROOT_PATH, 'dist');
-const env = process.env.NODE_ENV;
 
 module.exports = {
-    mode: env === 'production' ? 'production' : 'development',
-    devtool: env === 'production' ? false : 'inline-source-map',
+    mode: ifProduction('production','development'),
+    devtool: 'inline-source-map',
     entry: __dirname + "/src/index.js",
     output: {
         path:BUILD_PATH, //编译到当前目录
-        filename: 'scripts/[id].chunk.js', //编译后的文件名字
-        chunkFilename: 'scripts/[id].chunk.js',
+        chunkFilename: ifProduction('scripts/[id].[contenthash].js', 'scripts/[name].js'),
+        filename: ifProduction('scripts/bundle.js?v=[hash]', 'scripts/bundle.js')
+    },
+    resolve: {
+        modules: ['node_modules', join(__dirname, './node_modules')],
+        extensions: ['.js', '.jsx', '.ts', '.tsx', '.less', '.scss', '.json'],
+        alias: {
+            components: resolve(APP_PATH, './components')
+        }
     },
     devServer: {
         open:true,
@@ -26,42 +34,60 @@ module.exports = {
     },
     module: {
         rules: [
+            // {
+            //     test: /\.jsx?$/,
+            //     loader: 'eslint-loader',
+            //     enforce: 'pre',
+            //     exclude: resolve(__dirname, 'node_modules')
+            // },
             {
-                test: /\.scss$/,
-                use:
-                    env === 'production'
-                        ? [MiniCssExtractPlugin.loader, 'css-loader?importLoaders=1', 'postcss-loader']
-                        : [
-                            'css-hot-loader',
-                            MiniCssExtractPlugin.loader,
-                            'css-loader?importLoaders=1',
-                            'postcss-loader'
-                        ]
+                test: /\.jsx?$/,
+                exclude: resolve(__dirname, 'node_modules'),
+                loader: 'babel-loader'
             },
             {
-                test: /\.css$/,
-                include: [resolve('src')],
-                use: ['css-hot-loader', 'style-loader', 'css-loader', 'postcss-loader']
+                test: /\.(sc|c)ss$/,
+                exclude: /node_modules/,
+                use: removeEmpty([
+                    ifProduction(MiniCssExtractPlugin.loader),
+                    ifNotProduction({loader: 'style-loader', options: {sourceMap: true}}),
+                    {loader: 'css-loader', options: {sourceMap: true}},
+                    {loader: 'postcss-loader', options: {sourceMap: true}},
+                    {loader: 'sass-loader', options: {sourceMap: true}},
+                ]),
             },
             {
-                test:/\.(js|jsx)$/,
-                loader: "babel-loader",
-                include: [join(__dirname, 'src')]
+                test: /\.json$/,
+                loader: 'json-loader'
             },
             {
-                test: /\.(png|jpg|gif)$/,
-                use: [{
-                    loader: 'url-loader',
-                    options: { // 这里的options选项参数可以定义多大的图片转换为base64
-                        limit: 50000, // 表示小于50kb的图片转为base64,大于50kb的是路径
-                        outputPath: 'images' //定义输出的图片文件夹
-                    }
-                }]
+                test: /\.(ttf|eot|otf|svg|woff(2)?)(\?[a-z0-9]+)?$/,
+                loader: 'url-loader',
+                options: {
+                    limit: 1024,
+                    name: 'fonts/[name].[ext]'
+                }
+            },
+            {
+                test: /\.(ico|png|jpg|svg|gif)$/,
+                loader: 'url-loader',
+                options: {
+                    limit: 10240,
+                    name: 'images/[name].[ext]?v=[hash:base64:5]'
+                }
             }]
     },
-    plugins: [
-        new webpack.NamedModulesPlugin(),
-        new webpack.HotModuleReplacementPlugin(),
+    plugins: removeEmpty([
+        ifNotProduction(new webpack.NamedModulesPlugin()),
+        ifNotProduction(new webpack.HotModuleReplacementPlugin()),
+        ifProduction(new OptimizeCSSAssetsPlugin({})),
+        ifProduction(new CleanWebpackPlugin([BUILD_PATH])),
+        new webpack.DefinePlugin({
+            'process.env': {
+                NODE_ENV: JSON.stringify(process.env.NODE_ENV || 'production'),
+                APP_ENV: JSON.stringify(process.env.APP_ENV || 'production')
+            }
+        }),
         new MiniCssExtractPlugin({
             filename: "[name].css",
             chunkFilename: "css/[name].[hash:6].css",
@@ -71,32 +97,27 @@ module.exports = {
             inject: true, // 允许插件修改哪些内容，包括head与body
             hash: true // 为静态资源生成hash值
         })
-    ],
-    resolve: {
-        modules: ['node_modules', join(__dirname, './node_modules')],
-        extensions: ['.js', '.jsx', '.ts', '.tsx', '.less', '.scss', '.json'],
-        alias: {
-            components: resolve(APP_PATH, './components')
-        }
-    },
-}
-if (env === 'production') {
-    module.exports.optimization = {
+    ]),
+    optimization: {
         minimizer: [
             new UglifyJsPlugin({
-                cache: true,
-                parallel: true,
                 uglifyOptions: {
-                    compress: true,
-                    ecma: 6,
-                    mangle: true
-                },
-                sourceMap: true
-            })
+                    compress: {
+                        warnings: false,
+                        screw_ie8: true,
+                        conditionals: true,
+                        unused: true,
+                        comparisons: true,
+                        sequences: true,
+                        dead_code: true,
+                        evaluate: true,
+                        if_return: true,
+                        join_vars: true
+                    },
+                    mangle: true,
+                    output: { comments: false }
+                }
+            }),
         ]
-    };
-    module.exports.plugins = (module.exports.plugins || []).concat([
-        new OptimizeCSSAssetsPlugin({}),
-        new CleanWebpackPlugin([BUILD_PATH])
-    ]);
+    }
 }
